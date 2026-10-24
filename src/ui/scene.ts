@@ -81,9 +81,9 @@ export function drawScene(r: Renderer, sim: Sim, meshes: MeshCache, fx: Fx, cam:
 
   for (const s of sim.ships) {
     if (!s.alive) continue;
-    if (hidePlayer && s.isPlayer) continue;
+    if (hidePlayer && s.id === sim.localId) continue;
     // после возрождения корабль мигает
-    if (s.invuln > 0 && Math.floor(t * 12) % 2 === 0 && s.isPlayer) continue;
+    if (s.invuln > 0 && Math.floor(t * 12) % 2 === 0 && s.id === sim.localId) continue;
     r.addMesh(meshes.ship(s), s.pos, s.rot, s.kind === 'heavy' ? 1.25 : 1);
     const tail = vadd(s.pos, qrot(s.rot, v3(0, 0, s.kind === 'heavy' ? -4.2 : -3)));
     const flare = 0.5 + 0.9 * (s.speed / s.stats.maxSpeed);
@@ -95,7 +95,7 @@ export function drawScene(r: Renderer, sim: Sim, meshes: MeshCache, fx: Fx, cam:
     const owner = sim.shipById(b.owner);
     const col: RGB = owner ? owner.color : [255, 255, 255];
     // свои только что выпущенные болты рядом с камерой кабины дают гигантские штрихи — пропускаем
-    if (owner?.isPlayer && hidePlayer && BOLT_LIFE - b.life < 0.08) continue;
+    if (owner?.id === sim.localId && hidePlayer && BOLT_LIFE - b.life < 0.08) continue;
     r.addLine(b.pos, vmad(b.pos, b.vel, -0.025), css(col, 0.95), 2.5);
   }
   for (const m of sim.missiles) {

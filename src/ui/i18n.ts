@@ -21,6 +21,10 @@ const DICT = {
     bestWave: 'Рекорд волн', playAgain: 'ЕЩЁ РАЗ',
     help: 'Клавиши: WASD/стрелки — курс, Q/E — крен, R/F — тяга, Пробел — огонь, M — ракета (нужен захват), V — вид, Tab — таблица, P — пауза. Клик по игре включает мышь.',
     helpTouch: 'Касание слева — стик, справа — кнопки огня и ракет, ползунок — тяга.',
+    netTitle: 'СЕТЕВОЙ БОЙ', netPlayers: 'Игроки в комнате', netConnecting: 'Подключение к комнате…',
+    netWaitHost: 'Хост настраивает бой, ожидайте…', netHostLeft: 'Хост покинул игру', netLate: 'Бой уже начался без вас',
+    netNoSdk: 'Нет связи с сервером игр (не найден /sdk.js). Откройте игру из портала Cardputer.', toLobby: 'В ЛОББИ',
+    netHost: 'хост', netStarting: 'Запуск…',
   },
   en: {
     lock: 'LOCK', hull: 'HULL', energy: 'ENERGY', speed: 'SPEED', missiles: 'MISSILES', gyroOn: 'GYRO ON',
@@ -42,6 +46,10 @@ const DICT = {
     bestWave: 'Best wave', playAgain: 'AGAIN',
     help: 'Keys: WASD/arrows steer, Q/E roll, R/F throttle, Space fire, M missile (needs lock), V view, Tab scores, P pause. Click the game to enable mouse.',
     helpTouch: 'Touch left side for the stick, right for fire and missile buttons, slider sets throttle.',
+    netTitle: 'NETWORK BATTLE', netPlayers: 'Players in room', netConnecting: 'Connecting to the room…',
+    netWaitHost: 'The host is setting up the battle, please wait…', netHostLeft: 'The host left the game', netLate: 'The battle started without you',
+    netNoSdk: 'Cannot reach the game server (/sdk.js missing). Open the game from the Cardputer portal.', toLobby: 'TO LOBBY',
+    netHost: 'host', netStarting: 'Starting…',
   },
 } as const;
 

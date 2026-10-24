@@ -7,15 +7,22 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:cardputer": "npm run build && node scripts/pack-cardputer.mjs",
+    "mp": "npm run build:cardputer && node server/cardputer-server.mjs --stats",
+    "mp:lag": "npm run build:cardputer && node server/cardputer-server.mjs --stats --latency 60 --jitter 25 --loss 0",
+    "mp:serve": "node server/cardputer-server.mjs --stats",
+    "e2e": "python3 tests/e2e/mp_smoke.py"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/ws": "^8.18.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "ws": "^8.22.0"
   },
   "private": true,
   "type": "module"

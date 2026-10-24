@@ -12,6 +12,10 @@ import { Hud, HudState } from './ui/hud';
 import { t } from './ui/i18n';
 import { Menu, StartConfig } from './ui/menu';
 import { MeshCache, drawScene, orbitCamera, playerCamera } from './ui/scene';
+import { NetClient } from './net/client';
+import { NetHost } from './net/host';
+import type { NetSession } from './net/session';
+import { CpTransport, loadSdk } from './net/transport';
 
 const STEP = 1 / 60;
 
@@ -37,9 +41,16 @@ let overDelay = 0;
 let warnTimer = 0;
 const hs: HudState = { banner: null, feed: [], hitMarker: 0, external: false, scoreboard: false, gyro: false };
 
+let net: NetSession | null = null;
+let netStarted = false;
+const roomParam = new URLSearchParams(location.search).get('room');
+const dbg = document.createElement('div');
+dbg.style.cssText = 'position:fixed;left:6px;top:6px;font:11px monospace;color:#7fffd4;white-space:pre;pointer-events:none;display:none;text-shadow:0 0 3px #000';
+document.body.appendChild(dbg);
+
 const input: InputManager = new InputManager(canvas, ui, settings, { onPause: () => pauseGame() });
 const menu = new Menu(ui, profile, input, synth, {
-  onStart: (cfg) => startGame(cfg),
+  onStart: (cfg) => (net ? launchNet(cfg) : startGame(cfg)),
   onResume: () => resumeGame(),
   onQuit: () => quitToMenu(),
 });
@@ -71,6 +82,7 @@ function startGame(cfg: StartConfig): void {
 
 function pauseGame(): void {
   if (state !== 'play') return;
+  if (net && document.hidden) return;
   state = 'pause';
   input.setActive(false);
   menu.show('pause');
@@ -85,6 +97,7 @@ function resumeGame(): void {
 }
 
 function quitToMenu(): void {
+  if (net) { leaveRoom(); return; }
   state = 'menu';
   input.setActive(false);
   sim = makeDemo();
@@ -92,10 +105,65 @@ function quitToMenu(): void {
   menu.show('main');
 }
 
+function leaveRoom(): void {
+  const cp = (window as unknown as { CP?: { leave(): Promise<unknown> } }).CP;
+  net?.close();
+  net = null;
+  const go = (): void => { location.href = '/'; };
+  if (cp) cp.leave().then(go, go); else go();
+}
+
+function launchNet(cfg: StartConfig): void {
+  if (!(net instanceof NetHost) || net.status !== 'waiting') return;
+  menu.setNet({ starting: true });
+  net.launch(cfg.mode, cfg.bots, cfg.difficulty, (Math.random() * 1e9) | 0);
+}
+
+async function joinRoom(): Promise<void> {
+  menu.netMode = true;
+  menu.setNet({ message: t('netConnecting') });
+  menu.show('net');
+  const cp = await loadSdk();
+  if (!cp) { menu.setNet({ message: t('netNoSdk') }); return; }
+  const tr = new CpTransport(cp);
+  tr.onReady = () => {
+    if (net) return;
+    const host = tr.owner === tr.name;
+    const n: NetSession = host
+      ? new NetHost(tr, { mode: 'deathmatch', bots: 5, difficulty: 0.5, upgrades: profile.upgrades, seed: 0, autoStart: false })
+      : new NetClient(tr, profile.upgrades);
+    net = n;
+    n.onChange = refreshNetMenu;
+    refreshNetMenu();
+  };
+}
+
+function refreshNetMenu(): void {
+  if (!net) return;
+  let message = '';
+  if (net.status === 'ended') message = net.endReason === 'late' ? t('netLate') : t('netHostLeft');
+  const tr = net.members;
+  menu.setNet({ host: net.role === 'host', members: tr.slice(), owner: (window as unknown as { CP?: { owner: string } }).CP?.owner ?? '', message });
+}
+
+function startNetGame(): void {
+  if (!net?.sim) return;
+  sim = net.sim;
+  netStarted = true;
+  fx.clear();
+  hs.banner = null; hs.feed = []; hs.hitMarker = 0;
+  external = false; overDelay = 0; acc = 0;
+  state = 'play';
+  menu.hide();
+  input.setActive(true);
+  input.setThrottle(0.6);
+  synth.unlock();
+}
+
 function finishGame(): void {
   const p = sim.player;
   const mode = sim.opts.mode;
-  const win = sim.result.win;
+  const win = sim.viewerWon(p.id);
   const earned = 20 + p.kills * 25 + (win && mode !== 'waves' ? 200 : 0) + (mode === 'waves' ? Math.max(0, sim.wave - 1) * 60 : 0);
   profile.credits += earned;
   profile.totalKills += p.kills;
@@ -114,8 +182,8 @@ const att = (pos: { x: number; y: number; z: number }): number => {
 function handleEvents(events: SimEvent[], live: boolean): void {
   for (const e of events) {
     switch (e.type) {
-      case 'laser': if (live) synth.laser(e.own ? 1 : att(e.pos), e.own); break;
-      case 'missile': if (live) synth.missile(e.own ? 1 : att(e.pos)); break;
+      case 'laser': if (live) { const own = e.owner === sim.localId; synth.laser(own ? 1 : att(e.pos), own); } break;
+      case 'missile': if (live) synth.missile(e.owner === sim.localId ? 1 : att(e.pos)); break;
       case 'explode':
         fx.explosion(e.pos, e.size, e.color);
         if (live) synth.explosion(e.size, att(e.pos));
@@ -127,8 +195,8 @@ function handleEvents(events: SimEvent[], live: boolean): void {
       case 'hit':
         fx.spark(e.pos);
         if (!live) break;
-        if (e.onPlayer) { shake = 1; synth.hit(true); }
-        else { if (e.byPlayer) hs.hitMarker = 0.18; synth.hit(false, att(e.pos)); }
+        if (e.victim === sim.localId) { shake = 1; synth.hit(true); }
+        else { if (e.shooter === sim.localId) hs.hitMarker = 0.18; synth.hit(false, att(e.pos)); }
         break;
       case 'kill': {
         if (!live) break;
@@ -157,14 +225,34 @@ function frame(now: number): void {
   tAbs += dt;
   fx.update(dt);
 
+  if (net) {
+    if (net.status === 'ended' && state !== 'menu' && state !== 'over') {
+      state = 'menu';
+      input.setActive(false);
+      menu.setNet({ message: net.endReason === 'late' ? t('netLate') : t('netHostLeft') });
+      menu.show('net');
+    } else if (net.status === 'playing' && !netStarted) startNetGame();
+    else if (net.status === 'waiting' || state === 'menu') net.step(STEP, neutralInput());
+  }
+  if (net && state === 'pause') {
+    // в сети бой не останавливается: пока открыто меню паузы, корабль дрейфует без ввода
+    acc += dt;
+    let k = 0;
+    while (acc >= STEP && k++ < 6) { net.step(STEP, neutralInput()); acc -= STEP; }
+    if (k >= 6) acc = 0;
+    handleEvents(net.drainEvents(), false);
+  }
+  dbg.style.display = dbgOn && net ? 'block' : 'none';
+  if (dbgOn && net) dbg.textContent = Object.entries(net.debug()).map(([k, v]) => `${k}: ${v}`).join('\n');
+
   if (state === 'play') {
     if (input.consumeView()) external = !external;
     const inp = input.poll(dt);
     acc += dt;
     let n = 0;
-    while (acc >= STEP && n++ < 6) { sim.step(STEP, inp); acc -= STEP; }
+    while (acc >= STEP && n++ < 6) { if (net) net.step(STEP, inp); else sim.step(STEP, inp); acc -= STEP; }
     if (n >= 6) acc = 0;
-    handleEvents(sim.drainEvents(), true);
+    handleEvents(net ? net.drainEvents() : sim.drainEvents(), true);
     const p = sim.player;
     synth.engine(p.speed / p.stats.maxSpeed, p.alive);
     shake = Math.max(0, shake - dt * 3);
@@ -187,12 +275,14 @@ function frame(now: number): void {
   } else {
     // меню, пауза и итоги: за ними идёт демо-бой или замороженная сцена
     if (state === 'menu') {
-      acc += dt;
-      let n = 0;
-      while (acc >= STEP && n++ < 4) { sim.step(STEP, neutralInput()); acc -= STEP; }
-      if (n >= 4) acc = 0;
-      handleEvents(sim.drainEvents(), false);
-      if (sim.result.over) sim = makeDemo();
+      if (!(net && netStarted)) {
+        acc += dt;
+        let n = 0;
+        while (acc >= STEP && n++ < 4) { sim.step(STEP, neutralInput()); acc -= STEP; }
+        if (n >= 4) acc = 0;
+        handleEvents(sim.drainEvents(), false);
+        if (sim.result.over) sim = makeDemo();
+      }
       synth.engine(0, false);
       drawScene(renderer, sim, meshes, fx, orbitCamera(tAbs, 650), false, tAbs);
     } else {
@@ -204,12 +294,33 @@ function frame(now: number): void {
 }
 
 let last = performance.now();
+let dbgOn = new URLSearchParams(location.search).has('debug');
 window.addEventListener('resize', () => renderer.resize());
 window.addEventListener('orientationchange', () => setTimeout(() => renderer.resize(), 150));
-document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && !net) pauseGame(); });
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'F3') { dbgOn = !dbgOn; e.preventDefault(); }
   if (state === 'pause' && (e.code === 'KeyP' || e.code === 'Escape') && !e.repeat) resumeGame();
 });
 
-menu.show('main');
+if (roomParam) void joinRoom(); else menu.show('main');
 requestAnimationFrame(frame);
+
+// Отладочный доступ для e2e-тестов и консоли: window.__sa
+Object.defineProperty(window, '__sa', {
+  value: {
+    get state() { return state; },
+    get role() { return net?.role ?? 'solo'; },
+    get netStatus() { return net?.status ?? 'none'; },
+    get over() { return sim.result.over; },
+    get localId() { return sim.localId; },
+    ships() {
+      return sim.ships.map((s) => ({
+        id: s.id, name: s.name, alive: s.alive, hp: Math.round(s.hp), kills: s.kills, deaths: s.deaths,
+        pos: [s.pos.x, s.pos.y, s.pos.z].map(Math.round),
+      }));
+    },
+    debug: () => net?.debug() ?? {},
+    startHost: () => menu.cfg,
+  },
+});

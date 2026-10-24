@@ -251,7 +251,7 @@ export class Hud {
       ctx.fillText(`${t('teamBlue')} ${sim.teamKills[0]}  :  ${sim.teamKills[1]} ${t('teamRed')}   (${t('to')} ${sim.killLimit})`, x, y);
     } else {
       const left = sim.ships.filter((s) => !s.isPlayer && s.alive).length;
-      ctx.fillText(`${t('wave')} ${sim.wave}   ${t('enemies')}: ${left}   ${t('lives')}: ${'♥'.repeat(Math.max(0, sim.lives))}`, x, y);
+      ctx.fillText(`${t('wave')} ${sim.wave}   ${t('enemies')}: ${left}   ${t('lives')}: ${'♥'.repeat(Math.max(0, sim.player.lives))}`, x, y);
     }
   }
 
@@ -308,7 +308,7 @@ export class Hud {
     ctx.fillText(t('deaths'), x + w - 10, y + rh);
     rows.forEach((s: Ship, i) => {
       const yy = y + rh * (i + 2);
-      ctx.fillStyle = s.isPlayer ? '#fff' : `rgb(${s.color.join(',')})`;
+      ctx.fillStyle = s.id === sim.localId ? '#fff' : `rgb(${s.color.join(',')})`;
       ctx.textAlign = 'left';
       ctx.fillText(s.name, x + 10, yy);
       ctx.textAlign = 'right';

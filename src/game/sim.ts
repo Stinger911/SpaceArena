@@ -7,16 +7,16 @@ import { ShipStats, statsFor } from '../meta/upgrades';
 import { botThink } from './ai';
 import { ARENA_R, BOLT_LIFE, BOLT_SPEED, LOCK_RANGE } from './constants';
 import {
-  AIState, Bolt, Missile, Mode, Rock, Ship, ShipInput, SimEvent, SimOptions, SimResult, Structure, neutralInput,
+  AIState, Bolt, HumanSlot, Missile, Mode, Rock, Ship, ShipInput, SimEvent, SimOptions, SimResult, Structure, neutralInput,
 } from './types';
 
 export { ARENA_R, BOLT_SPEED, BOLT_LIFE, LOCK_RANGE };
 const LOCK_COS = 0.93;
-const MISSILE_LAUNCH = 430;
-const MISSILE_MAX = 560;
-const MISSILE_TURN = 2.7;
-const VOLLEY_COST = 7;
-const FIRE_CD = 0.16;
+export const MISSILE_LAUNCH = 430;
+export const MISSILE_MAX = 560;
+export const MISSILE_TURN = 2.7;
+export const VOLLEY_COST = 7;
+export const FIRE_CD = 0.16;
 const KILL_LIMIT: Record<Mode, number> = { deathmatch: 12, team: 20, waves: 0 };
 
 export const TEAM_COLORS: RGB[] = [[60, 150, 255], [255, 85, 70]];
@@ -45,26 +45,39 @@ export class Sim {
   rocks: Rock[] = [];
   structures: Structure[] = [];
   events: SimEvent[] = [];
-  result: SimResult = { over: false, win: false, winnerTeam: -1 };
+  result: SimResult = { over: false, win: false, winnerTeam: -1, winnerId: -1 };
   wave = 0;
-  lives = 3;
   teamKills = [0, 0];
+  localId: number;
+  readonly humans: HumanSlot[];
   private nextId = 0;
   private byId = new Map<number, Ship>();
   private waveTimer = 0;
   private waveSpawning = false;
-  private playerStats: ShipStats;
 
   constructor(opts: SimOptions) {
     this.opts = opts;
     this.rng = new Rng(opts.seed);
-    this.playerStats = statsFor(opts.upgrades);
+    this.humans = opts.humans ?? [{ name: 'Вы', upgrades: opts.upgrades }];
+    this.localId = opts.localId ?? 0;
     this.buildWorld();
-    this.addPlayer();
+    if (opts.replica) return;
+    this.addPlayers();
     this.populate();
   }
 
-  get player(): Ship { return this.ships[0]; }
+  /** Мой корабль. У реплики до первого снимка его может не быть — тогда заглушка. */
+  get player(): Ship { return this.byId.get(this.localId) ?? this.ships[0] ?? this.dummy(); }
+  private dummyShip: Ship | null = null;
+  private dummy(): Ship {
+    if (!this.dummyShip) {
+      const keep = this.ships.length;
+      this.dummyShip = this.newShip('…', 0, false, 'fighter', PLAYER_COLOR, statsFor(this.humans[0].upgrades), null, false);
+      this.ships.length = keep; this.byId.delete(this.dummyShip.id); this.nextId--;
+    }
+    return this.dummyShip;
+  }
+  get humanCount(): number { return this.humans.length; }
   get killLimit(): number { return KILL_LIMIT[this.opts.mode]; }
   shipById(id: number): Ship | undefined { return this.byId.get(id); }
   drainEvents(): SimEvent[] { const e = this.events; this.events = []; return e; }
@@ -117,9 +130,9 @@ export class Sim {
     };
   }
 
-  private newShip(name: string, team: number, isPlayer: boolean, kind: ShipKind, color: RGB, stats: ShipStats, ai: AIState | null): Ship {
+  newShip(name: string, team: number, isPlayer: boolean, kind: ShipKind, color: RGB, stats: ShipStats, ai: AIState | null, doSpawn = true): Ship {
     const s: Ship = {
-      id: this.nextId++, name, team, isPlayer, kind, color, pos: v3(), rot: qid(), speed: 0, bump: v3(),
+      id: this.nextId++, name, team, isPlayer, lives: 3, kind, color, pos: v3(), rot: qid(), speed: 0, bump: v3(),
       av: { p: 0, y: 0, r: 0 }, throttle: 0.6, hp: stats.maxHp, energy: 100, missiles: stats.maxMissiles,
       alive: false, respawn: 0, invuln: 0, kills: 0, deaths: 0, radius: kind === 'heavy' ? 6.5 : 4.5,
       fireCd: 0, missileCd: 0, resupply: 0, lock: -1, hitFlash: 0, lastAttacker: -1, outOfBounds: false,
@@ -127,8 +140,32 @@ export class Sim {
     };
     this.ships.push(s);
     this.byId.set(s.id, s);
-    this.spawn(s);
+    if (doSpawn) this.spawn(s);
     return s;
+  }
+
+  /** Корабль-реплика с заданным id (клиент). */
+  replicaShip(id: number, name: string, team: number, isPlayer: boolean, kind: ShipKind, color: RGB): Ship {
+    this.nextId = id;
+    const s = this.newShip(name, team, isPlayer, kind, color, this.botStats(kind, 0.5, 0), null, false);
+    this.nextId = Math.max(this.nextId, id + 1);
+    s.alive = false;
+    return s;
+  }
+
+  removeShip(id: number): void {
+    this.ships = this.ships.filter((s) => s.id !== id);
+    this.byId.delete(id);
+  }
+
+  /** Игрок отключился: его корабль переходит под управление бота. */
+  dropHuman(id: number): void {
+    const s = this.byId.get(id);
+    if (!s || !s.isPlayer) return;
+    s.isPlayer = false;
+    s.name = `${s.name} (бот)`;
+    s.ai = this.newAI(0.5);
+    if (this.opts.mode === 'waves') this.checkWavesLost();
   }
 
   private newAI(skill: number): AIState {
@@ -137,8 +174,14 @@ export class Sim {
     };
   }
 
-  private addPlayer(): void {
-    this.newShip('Вы', 0, true, 'fighter', PLAYER_COLOR, this.playerStats, null);
+  private addPlayers(): void {
+    const mode = this.opts.mode;
+    const solo = this.humans.length === 1;
+    this.humans.forEach((h, i) => {
+      const team = mode === 'team' ? i % 2 : mode === 'waves' ? 0 : i;
+      const color = solo ? PLAYER_COLOR : mode === 'team' ? TEAM_COLORS[team] : FFA_COLORS[i % FFA_COLORS.length];
+      this.newShip(h.name, team, true, 'fighter', color, statsFor(h.upgrades), null);
+    });
   }
 
   private populate(): void {
@@ -146,15 +189,19 @@ export class Sim {
     if (mode === 'deathmatch') {
       for (let i = 0; i < bots; i++) {
         const id = this.nextId;
-        this.newShip(CALLSIGNS[i % CALLSIGNS.length], id, false, 'fighter', FFA_COLORS[i % FFA_COLORS.length],
+        this.newShip(CALLSIGNS[i % CALLSIGNS.length], id, false, 'fighter', FFA_COLORS[(i + this.humans.length - 1) % FFA_COLORS.length],
           this.botStats('fighter', difficulty, 0), this.newAI(difficulty));
       }
     } else if (mode === 'team') {
-      const size = Math.max(2, bots);
-      for (let i = 0; i < size * 2 - 1; i++) {
-        const team = i < size - 1 ? 0 : 1;
-        this.newShip(CALLSIGNS[i % CALLSIGNS.length], team, false, 'fighter', TEAM_COLORS[team],
-          this.botStats('fighter', difficulty, 0), this.newAI(difficulty));
+      const per = [0, 0];
+      for (const s of this.ships) per[s.team]++;
+      const size = Math.max(2, bots, per[0], per[1]);
+      let n = 0;
+      for (const team of [0, 1]) {
+        for (let k = per[team]; k < size; k++) {
+          this.newShip(CALLSIGNS[n++ % CALLSIGNS.length], team, false, 'fighter', TEAM_COLORS[team],
+            this.botStats('fighter', difficulty, 0), this.newAI(difficulty));
+        }
       }
     } else {
       this.waveSpawning = true;
@@ -178,10 +225,11 @@ export class Sim {
       this.newShip(CALLSIGNS[(i + this.wave) % CALLSIGNS.length], 1, false, kind, color,
         this.botStats(kind, skill, this.wave), this.newAI(skill));
     }
-    const p = this.player;
-    if (p.alive) {
-      p.hp = Math.min(p.stats.maxHp, p.hp + 30);
-      p.missiles = p.stats.maxMissiles;
+    for (const p of this.ships) {
+      if (p.isPlayer && p.alive) {
+        p.hp = Math.min(p.stats.maxHp, p.hp + 30);
+        p.missiles = p.stats.maxMissiles;
+      }
     }
     this.events.push({ type: 'wave', wave: this.wave });
   }
@@ -226,15 +274,21 @@ export class Sim {
 
   // ---------- шаг симуляции ----------
 
-  step(dt: number, playerInput: ShipInput): void {
+  /** Ввод удалённого игрока (хост). */
+  setInput(id: number, inp: ShipInput): void {
+    const s = this.byId.get(id);
+    if (s) Object.assign(s.input, inp);
+  }
+
+  step(dt: number, localInput?: ShipInput): void {
     if (this.result.over) return;
     this.time += dt;
     const p = this.player;
-    Object.assign(p.input, playerInput);
+    if (localInput) Object.assign(p.input, localInput);
 
     for (const r of this.rocks) r.rot = qnorm(qmul(qaxis(r.axis, r.spin * dt), r.rot));
 
-    this.updateLocks(p);
+    this.updateLocks();
     for (const s of this.ships) {
       if (!s.alive) { s.hitFlash = Math.max(0, s.hitFlash - dt); continue; }
       if (s.ai) botThink(this, s, dt);
@@ -249,7 +303,7 @@ export class Sim {
     this.modeLogic(dt);
   }
 
-  private updateLocks(p: Ship): void {
+  updateLocks(): void {
     for (const s of this.ships) {
       if (!s.alive) { s.lock = -1; continue; }
       const fwd = qrot(s.rot, v3(0, 0, 1));
@@ -265,12 +319,12 @@ export class Sim {
         const score = c - d / 5000;
         if (score > bestScore) { bestScore = score; best = t.id; }
       }
-      if (s === p && best !== s.lock && best >= 0) this.events.push({ type: 'lock', id: best });
+      if (s.id === this.localId && best !== s.lock && best >= 0) this.events.push({ type: 'lock', id: best });
       s.lock = best;
     }
   }
 
-  private moveShip(s: Ship, dt: number): void {
+  moveShip(s: Ship, dt: number): void {
     const inp = s.input;
     const a = s.stats.agility;
     const k = 1 - Math.exp(-10 * dt);
@@ -303,7 +357,7 @@ export class Sim {
         const vel = vscale(fwd, BOLT_SPEED + s.speed);
         this.bolts.push({ owner: s.id, team: s.team, prev: muzzle, pos: muzzle, vel, life: BOLT_LIFE, dmg: s.stats.laserDamage });
       }
-      this.events.push({ type: 'laser', pos: s.pos, own: s.isPlayer });
+      this.events.push({ type: 'laser', pos: s.pos, owner: s.id });
     }
     if (inp.missile && s.missiles > 0 && s.missileCd <= 0 && s.lock >= 0) {
       s.missiles--;
@@ -312,18 +366,24 @@ export class Sim {
         owner: s.id, team: s.team, pos: vadd(s.pos, vscale(fwd, 6)), dir: fwd,
         speed: MISSILE_LAUNCH + s.speed * 0.5, life: 6, age: 0, target: s.lock, dmg: 60,
       });
-      this.events.push({ type: 'missile', pos: s.pos, own: s.isPlayer });
+      this.events.push({ type: 'missile', pos: s.pos, owner: s.id });
     }
   }
 
-  private environment(s: Ship, dt: number): void {
+  /** Предсказание на клиенте: движение и упругие столкновения без урона и событий. */
+  predictMove(s: Ship, dt: number): void {
+    this.moveShip(s, dt);
+    this.environment(s, dt, false);
+  }
+
+  private environment(s: Ship, dt: number, harm = true): void {
     // границы арены
     const d = vlen(s.pos);
     s.outOfBounds = d > ARENA_R;
     if (s.outOfBounds) {
       const dir = vscale(s.pos, 1 / d);
       s.bump = vmad(s.bump, dir, -(d - ARENA_R) * 3 * dt * 6);
-      if (d > ARENA_R * 1.12) this.damage(s, 8 * dt, -1, false);
+      if (harm && d > ARENA_R * 1.12) this.damage(s, 8 * dt, -1, false);
     }
     // астероиды
     for (const r of this.rocks) {
@@ -338,8 +398,10 @@ export class Sim {
       if (vn < 0) {
         s.bump = vmad(s.bump, n, -vn * 1.3);
         s.speed *= 0.55;
-        this.damage(s, Math.max(2, -vn * 0.1), -1, true);
-        this.events.push({ type: 'spark', pos: vmad(s.pos, n, -s.radius) });
+        if (harm) {
+          this.damage(s, Math.max(2, -vn * 0.1), -1, true);
+          this.events.push({ type: 'spark', pos: vmad(s.pos, n, -s.radius) });
+        }
       }
     }
     // станции и базы
@@ -355,11 +417,11 @@ export class Sim {
         if (vn < 0) {
           s.bump = vmad(s.bump, n, -vn * 1.2);
           s.speed *= 0.6;
-          this.damage(s, Math.max(1, -vn * 0.04), -1, true);
+          if (harm) this.damage(s, Math.max(1, -vn * 0.04), -1, true);
         }
       }
       // зона ремонта: нейтральные станции и своя база
-      if ((st.kind === 'station' || st.team === s.team) && dist < st.r + 150) {
+      if (harm && (st.kind === 'station' || st.team === s.team) && dist < st.r + 150) {
         s.hp = Math.min(s.stats.maxHp, s.hp + 16 * dt);
         s.resupply += dt;
         if (s.resupply >= 3 && s.missiles < s.stats.maxMissiles) { s.missiles++; s.resupply = 0; }
@@ -404,8 +466,7 @@ export class Sim {
       for (const t of this.ships) {
         if (!t.alive || t.team === b.team || t.invuln > 0) continue;
         if (segHitSphere(b.prev, b.pos, t.pos, t.radius + 1)) {
-          const shooter = this.byId.get(b.owner);
-          this.events.push({ type: 'hit', pos: b.pos, onPlayer: t.isPlayer, byPlayer: !!shooter?.isPlayer });
+          this.events.push({ type: 'hit', pos: b.pos, victim: t.id, shooter: b.owner });
           this.damage(t, b.dmg, b.owner, true);
           dead = true;
           break;
@@ -448,7 +509,7 @@ export class Sim {
           if (!t.alive || t.team === m.team || t.invuln > 0) continue;
           if (vlen(vsub(t.pos, m.pos)) < t.radius + 9) {
             this.damage(t, m.dmg, m.owner, true);
-            this.events.push({ type: 'hit', pos: m.pos, onPlayer: t.isPlayer, byPlayer: this.byId.get(m.owner)?.isPlayer ?? false });
+            this.events.push({ type: 'hit', pos: m.pos, victim: t.id, shooter: m.owner });
             boom = true;
             break;
           }
@@ -488,15 +549,20 @@ export class Sim {
     this.events.push({ type: 'kill', killer: killer ? killer.id : -1, victim: t.id });
     if (this.opts.mode === 'waves') {
       if (t.isPlayer) {
-        this.lives--;
-        if (this.lives <= 0) this.finish(false, -1);
-        else t.respawn = 3;
+        t.lives--;
+        if (t.lives > 0) t.respawn = 3;
+        else { t.respawn = -1; this.checkWavesLost(); }
       } else {
         t.respawn = -1;
       }
     } else {
       t.respawn = 3;
     }
+  }
+
+  private checkWavesLost(): void {
+    if (this.result.over) return;
+    if (!this.ships.some((s) => s.isPlayer && (s.lives > 0))) this.finish(false, -1, -1);
   }
 
   private handleRespawns(dt: number): void {
@@ -515,11 +581,11 @@ export class Sim {
     if (this.result.over) return;
     if (mode === 'deathmatch') {
       for (const s of this.ships) {
-        if (s.kills >= this.killLimit) { this.finish(s.isPlayer, s.team); return; }
+        if (s.kills >= this.killLimit) { this.finish(s.isPlayer, s.team, s.id); return; }
       }
     } else if (mode === 'team') {
       for (const t of [0, 1]) {
-        if (this.teamKills[t] >= this.killLimit) { this.finish(t === 0, t); return; }
+        if (this.teamKills[t] >= this.killLimit) { this.finish(t === 0, t, -1); return; }
       }
     } else {
       const botsAlive = this.ships.some((s) => !s.isPlayer && s.alive);
@@ -531,8 +597,19 @@ export class Sim {
     }
   }
 
-  private finish(win: boolean, winnerTeam: number): void {
-    this.result = { over: true, win, winnerTeam };
+  /** Победил ли корабль с этим id (для итогов у каждого игрока своих). */
+  viewerWon(id: number): boolean {
+    const r = this.result;
+    if (!r.over) return false;
+    const mode = this.opts.mode;
+    if (mode === 'waves') return false;
+    if (mode === 'team') return this.byId.get(id)?.team === r.winnerTeam;
+    return r.winnerId === id;
+  }
+
+  finish(win: boolean, winnerTeam: number, winnerId = -1): void {
+    if (this.result.over) return;
+    this.result = { over: true, win, winnerTeam, winnerId };
     this.events.push({ type: 'over', win });
   }
 

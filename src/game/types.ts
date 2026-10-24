@@ -34,7 +34,10 @@ export interface Ship {
   id: number;
   name: string;
   team: number;
+  /** управляется человеком (локальным или удалённым) */
   isPlayer: boolean;
+  /** жизни (режим волн) */
+  lives: number;
   kind: ShipKind;
   color: RGB;
   pos: Vec3;
@@ -109,9 +112,9 @@ export interface Structure {
 }
 
 export type SimEvent =
-  | { type: 'laser'; pos: Vec3; own: boolean }
-  | { type: 'missile'; pos: Vec3; own: boolean }
-  | { type: 'hit'; pos: Vec3; onPlayer: boolean; byPlayer: boolean }
+  | { type: 'laser'; pos: Vec3; owner: number }
+  | { type: 'missile'; pos: Vec3; owner: number }
+  | { type: 'hit'; pos: Vec3; victim: number; shooter: number }
   | { type: 'spark'; pos: Vec3 }
   | { type: 'explode'; pos: Vec3; size: number; color: RGB }
   | { type: 'kill'; killer: number; victim: number }
@@ -120,8 +123,19 @@ export type SimEvent =
   | { type: 'lock'; id: number }
   | { type: 'over'; win: boolean };
 
+export interface HumanSlot {
+  name: string;
+  upgrades: Upgrades;
+}
+
 export interface SimOptions {
   mode: Mode;
+  /** Люди в бою: id корабля = индекс. По умолчанию один игрок «Вы». */
+  humans?: HumanSlot[];
+  /** Какой корабль «мой» (для звуков и камеры). */
+  localId?: number;
+  /** Реплика на клиенте: строится только мир, корабли приходят из снимков. */
+  replica?: boolean;
   seed: number;
   upgrades: Upgrades;
   /** Число соперников (deathmatch/team: размер команды) */
@@ -135,4 +149,6 @@ export interface SimResult {
   win: boolean;
   /** победившая команда или -1 */
   winnerTeam: number;
+  /** корабль-победитель (deathmatch) или -1 */
+  winnerId: number;
 }

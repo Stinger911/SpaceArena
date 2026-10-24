@@ -19,6 +19,15 @@ export interface OverInfo {
   earned: number;
 }
 
+export interface NetInfo {
+  host: boolean;
+  members: string[];
+  owner: string;
+  /** сообщение вместо формы (ошибка, ожидание) */
+  message: string;
+  starting: boolean;
+}
+
 export interface MenuHooks {
   onStart(cfg: StartConfig): void;
   onResume(): void;
@@ -43,7 +52,9 @@ const UP_NAMES: Record<UpgradeId, [Key, Key]> = {
 export class Menu {
   cfg: StartConfig = { mode: 'deathmatch', bots: 5, difficulty: 0.5 };
   private el: HTMLElement;
-  private screen: 'main' | 'hangar' | 'settings' | 'pause' | 'over' | 'none' = 'none';
+  private screen: 'main' | 'hangar' | 'settings' | 'pause' | 'over' | 'net' | 'none' = 'none';
+  netMode = false;
+  private net: NetInfo = { host: false, members: [], owner: '', message: '', starting: false };
   private over: OverInfo | null = null;
   private note = '';
 
@@ -60,7 +71,7 @@ export class Menu {
 
   hide(): void { this.screen = 'none'; this.el.classList.add('hidden'); }
 
-  show(screen: 'main' | 'hangar' | 'settings' | 'pause' | 'over', over?: OverInfo): void {
+  show(screen: 'main' | 'hangar' | 'settings' | 'pause' | 'over' | 'net', over?: OverInfo): void {
     this.screen = screen;
     if (over) this.over = over;
     this.el.classList.remove('hidden');
@@ -74,11 +85,18 @@ export class Menu {
       case 'settings': this.el.innerHTML = this.settingsHtml(); break;
       case 'pause': this.el.innerHTML = this.pauseHtml(); break;
       case 'over': this.el.innerHTML = this.overHtml(); break;
+      case 'net': this.el.innerHTML = this.netHtml(); break;
       default: this.el.innerHTML = '';
     }
   }
 
-  private mainHtml(): string {
+  /** Обновить экран ожидания сети. */
+  setNet(info: Partial<NetInfo>): void {
+    this.net = { ...this.net, ...info };
+    if (this.screen === 'net') this.render();
+  }
+
+  private configHtml(): string {
     const c = this.cfg;
     const modes = MODES.map((m) =>
       `<button data-act="mode" data-v="${m.mode}" class="${c.mode === m.mode ? 'sel' : ''}">${t(m.name)}</button>`).join('');
@@ -89,13 +107,32 @@ export class Menu {
       <div class="stat"><span>${t('botsLabel')}</span>
         <span class="row"><button data-act="bots" data-v="-1">−</button><span>${c.bots}</span><button data-act="bots" data-v="1">+</button></span></div>`;
     return `
-      <h1>${t('title')}</h1>
-      <p>${t('subtitle')}</p>
       <h2>${t('modeTitle')}</h2>
       <div class="row">${modes}</div>
       <p>${t(desc.desc)}</p>
       ${botsRow}
-      <div class="stat"><span>${t('diffLabel')}</span><span class="row">${diffs}</span></div>
+      <div class="stat"><span>${t('diffLabel')}</span><span class="row">${diffs}</span></div>`;
+  }
+
+  private netHtml(): string {
+    const n = this.net;
+    const esc = (x: string): string => x.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+    const list = n.members.map((m) => `<div>${m === n.owner ? '👑 ' : '👤 '}${esc(m)}${m === n.owner ? ` (${t('netHost')})` : ''}</div>`).join('');
+    let body = '';
+    if (n.message) body = `<p>${n.message}</p>`;
+    else if (n.host) body = `${this.configHtml()}<button data-act="start" ${n.starting ? 'disabled' : ''}>${n.starting ? t('netStarting') : t('start')}</button>`;
+    else body = `<p>${t('netWaitHost')}</p>`;
+    return `<h1>${t('title')}</h1><h2>${t('netTitle')}</h2>
+      ${n.members.length ? `<h2>${t('netPlayers')}</h2><div>${list}</div>` : ''}
+      ${body}
+      <button data-act="quit">${t('toLobby')}</button>`;
+  }
+
+  private mainHtml(): string {
+    return `
+      <h1>${t('title')}</h1>
+      <p>${t('subtitle')}</p>
+      ${this.configHtml()}
       <button data-act="start">${t('start')}</button>
       <div class="row"><button data-act="hangar">${t('hangar')} (${this.profile.credits})</button><button data-act="settings">${t('settings')}</button></div>
       <p>${t('help')}</p><p>${t('helpTouch')}</p>
@@ -146,9 +183,9 @@ export class Menu {
     const title = o.mode === 'waves' ? t('gameOver') : o.win ? t('victory') : t('defeat');
     const extra = o.mode === 'waves' ? `<p>${t('reachedWave')}: ${o.wave}</p>` : '';
     return `<h1>${title}</h1>${extra}<p>${t('kills')}: ${o.kills}</p><p>${t('earned')}: ${o.earned}</p>
-      <button data-act="again">${t('playAgain')}</button>
+      ${this.netMode ? '' : `<button data-act="again">${t('playAgain')}</button>`}
       <button data-act="hangar">${t('hangar')} (${this.profile.credits})</button>
-      <button data-act="quit">${t('quit')}</button>`;
+      <button data-act="quit">${this.netMode ? t('toLobby') : t('quit')}</button>`;
   }
 
   private onInput(e: Event): void {
@@ -174,7 +211,7 @@ export class Menu {
       case 'start': case 'again': this.hooks.onStart(this.cfg); break;
       case 'hangar': this.show('hangar'); break;
       case 'settings': this.settingsFrom = this.screen === 'pause' ? 'pause' : 'main'; this.note = ''; this.show('settings'); break;
-      case 'back': this.show(this.screen === 'settings' ? this.settingsFrom : 'main'); break;
+      case 'back': this.show(this.screen === 'settings' ? this.settingsFrom : this.netMode ? 'over' : 'main'); break;
       case 'buy':
         if (buyUpgrade(this.profile, v as UpgradeId)) saveProfile(this.profile);
         this.render();
