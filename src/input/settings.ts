@@ -9,7 +9,7 @@ export interface Settings {
   sensitivity: number;
 }
 
-const KEY = 'void-arena-settings-v1';
+const KEY = 'space-arena-settings-v1';
 
 export const defaultSettings = (): Settings => ({ invertY: false, gyro: false, touch: 'auto', sound: true, sensitivity: 1 });
 

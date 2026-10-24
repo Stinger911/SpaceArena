@@ -7,7 +7,7 @@ const DICT = {
     wave: 'ВОЛНА', enemies: 'Враги', lives: 'Жизни', destroyed: 'ВЫ УНИЧТОЖЕНЫ', respawnIn: 'Возрождение через',
     leaving: 'ПОКИДАЕТЕ АРЕНУ — РАЗВЕРНИТЕСЬ!', missileReady: 'ЦЕЛЬ В ЗАХВАТЕ — РАКЕТА ГОТОВА', pilot: 'Пилот',
     pause: 'ПАУЗА',
-    title: 'VOID ARENA', subtitle: 'Космический бой на векторной арене',
+    title: 'SPACE ARENA', subtitle: 'Космический бой на векторной арене',
     modeTitle: 'Режим боя', deathmatch: 'Дезматч', deathmatchD: 'Каждый сам за себя, до 12 убийств',
     team: 'Командный бой', teamD: 'Две команды с базами, до 20 убийств', waves: 'Волны ботов', wavesD: 'Выживайте против нарастающих волн, 3 жизни',
     botsLabel: 'Соперников', diffLabel: 'Сложность', easy: 'Лёгкая', normal: 'Нормальная', hard: 'Тяжёлая',
@@ -28,7 +28,7 @@ const DICT = {
     wave: 'WAVE', enemies: 'Enemies', lives: 'Lives', destroyed: 'YOU WERE DESTROYED', respawnIn: 'Respawn in',
     leaving: 'LEAVING THE ARENA — TURN BACK!', missileReady: 'TARGET LOCKED — MISSILE READY', pilot: 'Pilot',
     pause: 'PAUSE',
-    title: 'VOID ARENA', subtitle: 'Vector-arena space combat',
+    title: 'SPACE ARENA', subtitle: 'Vector-arena space combat',
     modeTitle: 'Battle mode', deathmatch: 'Deathmatch', deathmatchD: 'Free for all, first to 12 kills',
     team: 'Team battle', teamD: 'Two teams with bases, first to 20 kills', waves: 'Bot waves', wavesD: 'Survive escalating waves, 3 lives',
     botsLabel: 'Opponents', diffLabel: 'Difficulty', easy: 'Easy', normal: 'Normal', hard: 'Hard',
@@ -47,7 +47,7 @@ const DICT = {
 
 export type Key = keyof (typeof DICT)['ru'];
 
-const LANG_KEY = 'void-arena-lang';
+const LANG_KEY = 'space-arena-lang';
 
 function detect(): Lang {
   try {

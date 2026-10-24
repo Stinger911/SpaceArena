@@ -40,7 +40,7 @@ export function upgradeCost(level: number): number {
   return Math.round((120 * Math.pow(level + 1, 1.45)) / 10) * 10;
 }
 
-const KEY = 'void-arena-profile-v1';
+const KEY = 'space-arena-profile-v1';
 
 export function defaultProfile(): Profile {
   return { credits: 0, upgrades: emptyUpgrades(), bestWave: 0, totalKills: 0 };
